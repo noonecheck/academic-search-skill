@@ -60,6 +60,14 @@ export default function App() {
     }
   }, [photoUrl])
 
+  useEffect(() => {
+    const video = videoRef.current
+    const stream = streamRef.current
+    if (!cameraOn || !video || !stream) return
+    video.srcObject = stream
+    void video.play().catch(() => {})
+  }, [cameraOn])
+
   async function analyzeFile(file: File) {
     setBusy(true)
     try {
@@ -81,6 +89,15 @@ export default function App() {
     }
   }
 
+  function goSnap() {
+    // Fresh snap session: don't show a leftover atlas selection.
+    if (!photoUrl) {
+      setSelected(null)
+      setMatches([])
+    }
+    setTab('snap')
+  }
+
   async function onPick(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (file) await analyzeFile(file)
@@ -89,20 +106,16 @@ export default function App() {
 
   async function startCamera() {
     try {
+      goSnap()
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: 'environment' } },
         audio: false,
       })
       streamRef.current = stream
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        await videoRef.current.play()
-      }
       setCameraOn(true)
-      setTab('snap')
     } catch {
-      setQuizMsg('相机打不开，试试「上传照片」吧。')
-      setTab('snap')
+      setCameraOn(false)
+      goSnap()
     }
   }
 
@@ -135,11 +148,12 @@ export default function App() {
 
   const quizTarget = literacyChars[quizIndex % literacyChars.length]
   const quizPicks = (() => {
-    const others = literacyChars.filter((c) => c.char !== quizTarget.char)
-    const pick = (offset: number) => others[(quizIndex * 3 + offset) % others.length].char
-    const opts = [quizTarget.char, pick(1), pick(2)]
+    const pool = literacyChars.map((c) => c.char).filter((ch) => ch !== quizTarget.char)
+    const a = pool[quizIndex % pool.length]
+    const b = pool[(quizIndex + 5) % pool.length]
+    const trio = [quizTarget.char, a, b]
     const rot = quizIndex % 3
-    return [...opts.slice(rot), ...opts.slice(0, rot)]
+    return [...trio.slice(rot), ...trio.slice(0, rot)]
   })()
 
   function answerQuiz(char: string) {
@@ -267,7 +281,7 @@ export default function App() {
               </div>
             )}
 
-            {selected && (
+            {photoUrl && selected && (
               <div className="learn-block">
                 <div className="learn-head">
                   <MushroomArt tone={selected.svgTone} title={selected.name} className="learn-art" />
@@ -404,7 +418,7 @@ export default function App() {
             key={id}
             type="button"
             className={tab === id ? 'dock-btn active' : 'dock-btn'}
-            onClick={() => setTab(id)}
+            onClick={() => (id === 'snap' ? goSnap() : setTab(id))}
           >
             {label}
           </button>
