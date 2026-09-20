@@ -29,31 +29,55 @@ function rgbToHsl(r: number, g: number, b: number): ColorSample {
 
 export async function sampleImageColors(
   source: HTMLImageElement | HTMLCanvasElement | ImageBitmap,
-  maxSamples = 48,
+  maxSamples = 64,
 ): Promise<ColorSample[]> {
   const canvas = document.createElement('canvas')
-  const size = 64
+  const size = 96
   canvas.width = size
   canvas.height = size
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   if (!ctx) return []
-  ctx.drawImage(source as CanvasImageSource, 0, 0, size, size)
+
+  // Center-crop so lawn/sky background influences matching less.
+  const sw = 'width' in source ? Number(source.width) : size
+  const sh = 'height' in source ? Number(source.height) : size
+  const side = Math.min(sw, sh) * 0.72
+  const sx = (sw - side) / 2
+  const sy = (sh - side) / 2
+  ctx.drawImage(source as CanvasImageSource, sx, sy, side, side, 0, 0, size, size)
+
   const { data } = ctx.getImageData(0, 0, size, size)
-  const samples: ColorSample[] = []
-  const step = Math.max(4, Math.floor((size * size) / maxSamples))
-  for (let i = 0; i < size * size; i += step) {
-    const idx = i * 4
-    const a = data[idx + 3]
-    if (a < 180) continue
-    const r = data[idx]
-    const g = data[idx + 1]
-    const b = data[idx + 2]
-    // Skip near-white / near-black backgrounds
-    const brightness = (r + g + b) / 3
-    if (brightness > 245 || brightness < 12) continue
-    samples.push(rgbToHsl(r, g, b))
+  const buckets = new Map<string, { sample: ColorSample; weight: number }>()
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const idx = (y * size + x) * 4
+      const a = data[idx + 3]
+      if (a < 180) continue
+      const r = data[idx]
+      const g = data[idx + 1]
+      const b = data[idx + 2]
+      const brightness = (r + g + b) / 3
+      if (brightness > 245 || brightness < 12) continue
+      const sample = rgbToHsl(r, g, b)
+      // Downweight leafy greens that usually come from grass/trees.
+      const leafy = sample.h >= 75 && sample.h <= 165 && sample.s > 18 && sample.l > 25 && sample.l < 75
+      const satBoost = sample.s > 35 ? 2.2 : sample.s > 18 ? 1.3 : 0.7
+      const weight = (leafy ? 0.25 : 1) * satBoost
+      const key = `${Math.round(sample.h / 12)}_${Math.round(sample.s / 12)}_${Math.round(sample.l / 12)}`
+      const prev = buckets.get(key)
+      if (prev) prev.weight += weight
+      else buckets.set(key, { sample, weight })
+    }
   }
-  return samples
+
+  return [...buckets.values()]
+    .sort((a, b) => b.weight - a.weight)
+    .slice(0, maxSamples)
+    .flatMap(({ sample, weight }) => {
+      const copies = Math.max(1, Math.round(weight))
+      return Array.from({ length: Math.min(copies, 4) }, () => sample)
+    })
 }
 
 function colorDistance(a: ColorSample, b: ColorSample) {
